@@ -1,6 +1,7 @@
 import os
 from multiprocessing import Process, Queue
 from pathlib import Path
+import csv
 
 import cv2
 import numpy as np
@@ -21,12 +22,12 @@ def show_image(image, t=0):
     cv2.waitKey(t)
 
 @torch.no_grad()
-def run(cfg, network, sequence_path, rgb_txt, calibration_yaml, viz=False, timeit=False):
+def run(cfg, network, sequence_path, rgb_csv, calibration_yaml, viz=False, timeit=False):
 
     slam = None
     queue = Queue(maxsize=8)
 
-    reader = Process(target=image_stream, args=(queue, sequence_path, rgb_txt, calibration_yaml))
+    reader = Process(target=image_stream, args=(queue, sequence_path, rgb_csv, calibration_yaml))
     reader.start()
 
     while 1:
@@ -54,12 +55,13 @@ def main():
 
     import argparse
     parser = argparse.ArgumentParser()
-    parser.add_argument("--sequence_path", type=str, help="path to image directory")
-    parser.add_argument("--calibration_yaml", type=str, help="path to calibration file")
-    parser.add_argument("--rgb_txt", type=str, help="path to image list")
-    parser.add_argument("--exp_folder", type=str, help="path to save results")
-    parser.add_argument("--exp_it", type=str, help="experiment iteration")
-    parser.add_argument("--settings_yaml", type=str, help="settings_yaml")
+    
+    parser.add_argument("--sequence_path", type=Path, required=True)
+    parser.add_argument("--calibration_yaml", type=Path, required=True)
+    parser.add_argument("--rgb_csv", type=Path, required=True)
+    parser.add_argument("--exp_folder", type=Path, required=True)
+    parser.add_argument("--exp_it", type=str, default="0")
+    parser.add_argument("--settings_yaml", type=Path, default=None)
     parser.add_argument("--verbose", type=str, help="verbose")
 
     parser.add_argument('--network', type=str, default='dpvo.pth')
@@ -77,13 +79,18 @@ def main():
     #print(cfg)
 
     (poses, tstamps), (points, colors, calib) = run(cfg, args.network, 
-                                                    args.sequence_path, args.rgb_txt, args.calibration_yaml, 
+                                                    args.sequence_path, args.rgb_csv, args.calibration_yaml, 
                                                     bool(int(args.verbose)), args.timeit)
-    trajectory = PoseTrajectory3D(positions_xyz=poses[:,:3], orientations_quat_wxyz=poses[:, [6, 3, 4, 5]], timestamps=tstamps)
 
-    keyFrameTrajectory_txt = os.path.join(args.exp_folder, args.exp_it.zfill(5) + '_KeyFrameTrajectory' + '.txt')
-    file_interface.write_tum_trajectory_file(keyFrameTrajectory_txt, trajectory)
- 
+    keyframe_csv = args.exp_folder / f"{args.exp_it.zfill(5)}_KeyFrameTrajectory.csv"
+    with open(keyframe_csv, "w", newline="") as f:
+        writer = csv.writer(f)
+        writer.writerow(["timestamp", "tx", "ty", "tz", "qx", "qy", "qz", "qw"])
+        for i in range(len(tstamps)):
+            ts = tstamps[i]
+            tx, ty, tz, qx, qy, qz, qw = poses[i]
+            writer.writerow([ts, tx, ty, tz, qx, qy, qz, qw])
+
 if __name__ == '__main__':
     main()
 

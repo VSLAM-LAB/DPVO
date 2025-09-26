@@ -5,37 +5,39 @@ import numpy as np
 from multiprocessing import Process, Queue
 from pathlib import Path
 from itertools import chain
+import pandas as pd
 
-def image_stream(queue, sequence_path, rgb_txt, calibration_yaml):
+def load_calibration(calibration_yaml: Path):
+    fs = cv2.FileStorage(str(calibration_yaml), cv2.FILE_STORAGE_READ)
+    def read_real(key: str) -> float:
+        node = fs.getNode(key)
+        return float(node.real()) if not node.empty() else 0.0
+
+    fx, fy, cx, cy = map(read_real, ["Camera0.fx", "Camera0.fy", "Camera0.cx", "Camera0.cy"])
+    k1, k2, p1, p2, k3 = map(read_real, ["Camera0.k1", "Camera0.k2", "Camera0.p1", "Camera0.p2", "Camera0.k3"])
+    fs.release()
+
+    K = np.array([[fx, 0,  cx],
+                  [0,  fy, cy],
+                  [0,  0,   1]], dtype=np.float32)
+    dist = np.array([k1, k2, p1, p2, k3], dtype=np.float32)
+    has_dist = not np.allclose(dist, 0.0)
+    return K, dist, has_dist
+
+def image_stream(queue, sequence_path, rgb_csv, calibration_yaml):
+
     """ image generator """
-
-    # Load calibration
-    with open(calibration_yaml, 'r') as file:
-        lines = file.readlines()
-    if lines and lines[0].strip() == '%YAML:1.0':
-        lines = lines[1:]
-
-    calibration = yaml.safe_load(''.join(lines))  
-
-    fx, fy, cx, cy = calibration["Camera.fx"],calibration["Camera.fy"],calibration["Camera.cx"],calibration["Camera.cy"]
-    K = np.eye(3)
-    K[0, 0] = fx
-    K[0, 2] = cx
-    K[1, 1] = fy
-    K[1, 2] = cy
+    K, _, _ = load_calibration(calibration_yaml)
+    fx, fy, cx, cy = K[0,0], K[1,1], K[0,2], K[1,2]
 
     # Load paths
-    image_list = []
-    timestamps = []
-    with open(rgb_txt, 'r') as file:
-        for line in file:
-            timestamp, path, *extra = line.strip().split(' ')
-            image_list.append(os.path.join(sequence_path, path))
-            timestamps.append(float(timestamp))    
+    df = pd.read_csv(rgb_csv)       
+    image_list = df['path_rgb0'].to_list()
+    timestamps = df['ts_rgb0 (s)'].to_list()
 
     # Load images
     for t, imfile in enumerate(image_list):
-        image = cv2.imread(str(imfile))
+        image = cv2.imread(str(os.path.join(sequence_path, imfile)))
        
         if 0:
             image = cv2.resize(image, None, fx=0.5, fy=0.5)
